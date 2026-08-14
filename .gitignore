@@ -1,0 +1,14 @@
+.DS_Store
+
+# Build and local dependencies
+prototype/node_modules/
+prototype/dist/
+
+# Local design-verification captures
+prototype/implementation-desktop.png
+prototype/implementation-mobile.png
+prototype/design-comparison.png
+prototype/progress-check.png
+prototype/design-qa.md
+prototype/AGENTS.md
+prototype/.openai/
