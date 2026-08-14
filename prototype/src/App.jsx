@@ -6,6 +6,7 @@ import {
   FiChevronDown,
   FiChevronUp,
   FiCopy,
+  FiDownload,
   FiEdit3,
   FiHelpCircle,
   FiInfo,
@@ -38,6 +39,19 @@ const inputFields = [
   { key: "margin", number: "5", label: "原価・変動費の割合", helper: "売上に対してかかる仕入れ・発送などの費用", unit: "%", min: 0, max: 100, step: 1 },
 ];
 
+const optionalFields = [
+  { key: "closeRate", label: "CV後の成約率", unit: "%" },
+  { key: "monthlyFee", label: "月額運用手数料", unit: "円" },
+  { key: "initialFee", label: "初期費用", unit: "円" },
+];
+
+const exportFormats = [
+  { value: "txt", label: "テキストファイル（.txt）", description: "メモやメールで共有しやすい形式です。" },
+  { value: "pdf", label: "PDF（.pdf）", description: "レイアウトを保ったまま印刷・共有できます。" },
+  { value: "xlsx", label: "Excel（.xlsx）", description: "入力・結果・シナリオをシートごとに編集できます。" },
+  { value: "csv", label: "CSV（.csv）", description: "表計算ソフトや他のツールに取り込めます。" },
+];
+
 function number(value) {
   const parsed = Number(String(value).replaceAll(",", ""));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -56,6 +70,134 @@ function count(value) {
 function percent(value) {
   if (!Number.isFinite(value)) return "算出不可";
   return `${value.toLocaleString("ja-JP", { maximumFractionDigits: 1 })}%`;
+}
+
+function inputValue(value, unit) {
+  const numericValue = number(value);
+  return unit === "%" ? `${numericValue.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}%` : yen(numericValue);
+}
+
+function exportTimestamp(date = new Date()) {
+  const datePart = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Tokyo" }).format(date).replaceAll("-", "");
+  const timePart = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(date).replaceAll(":", "").replaceAll(" ", "");
+  return `${datePart}_${timePart}`;
+}
+
+function formatExportDate(date = new Date()) {
+  return new Intl.DateTimeFormat("ja-JP", { dateStyle: "long", timeStyle: "short" }).format(date);
+}
+
+function createReport(values, result, scenarios, createdAt = new Date()) {
+  const inputs = [...inputFields, ...optionalFields].map((field) => ({
+    item: field.label,
+    value: inputValue(values[field.key], field.unit),
+  }));
+  const results = [
+    { item: "見込まれる月間の利益", value: yen(result.profit) },
+    { item: "想定クリック数", value: `${result.clicks.toLocaleString("ja-JP", { maximumFractionDigits: 1 })}回` },
+    { item: "想定コンバージョン数", value: count(result.cvs) },
+    { item: "想定成約数", value: count(result.closed) },
+    { item: "売上（見込み）", value: yen(result.sales) },
+    { item: "粗利益（見込み）", value: yen(result.grossProfit) },
+    { item: "初月利益（初期費用を含む）", value: yen(result.initialProfit) },
+    { item: "CPA（1件の成果を得る費用）", value: yen(result.cpa) },
+    { item: "ROAS（広告費に対する売上）", value: percent(result.roas) },
+    { item: "損益分岐コンバージョン率", value: percent(result.breakEvenCvr) },
+    { item: "損益分岐成約数", value: count(result.breakEvenClosed) },
+  ];
+  const scenarioRows = scenarios.map((scenario) => ({
+    scenario: scenario.label,
+    condition: scenario.description,
+    profit: yen(scenario.result.profit),
+    sales: yen(scenario.result.sales),
+    cvs: count(scenario.result.cvs),
+  }));
+  return { createdAt, inputs, results, scenarioRows };
+}
+
+function reportAsText(report) {
+  const lines = [
+    "ウェブ広告パフォーマンスシミュレーション レポート",
+    `作成日時: ${formatExportDate(report.createdAt)}`,
+    "",
+    "■ 入力条件",
+    ...report.inputs.map((row) => `${row.item}: ${row.value}`),
+    "",
+    "■ シミュレーション結果（1か月あたり）",
+    ...report.results.map((row) => `${row.item}: ${row.value}`),
+    "",
+    "■ シナリオ比較",
+    ...report.scenarioRows.map((row) => `${row.scenario}（${row.condition}）: 月間利益 ${row.profit} / 売上 ${row.sales} / CV数 ${row.cvs}`),
+    "",
+    "※ このレポートは概算シミュレーションです。実際の成果や利益を保証するものではありません。",
+  ];
+  return lines.join("\r\n");
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function escapeHtml(value) {
+  return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+}
+
+function reportTable(title, rows, headings = ["項目", "数値"]) {
+  return `<section style="margin-top:16px"><h2 style="margin:0 0 7px;color:#0c51cf;font-size:17px">${escapeHtml(title)}</h2><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr>${headings.map((heading) => `<th style="padding:6px 8px;background:#0c51cf;color:#fff;text-align:left;font-weight:700">${escapeHtml(heading)}</th>`).join("")}</tr></thead><tbody>${rows.map((row, index) => `<tr style="background:${index % 2 ? "#f7faff" : "#fff"}">${Object.values(row).map((value) => `<td style="padding:5px 8px;border:1px solid #d9e4f2;color:#26354d">${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></section>`;
+}
+
+async function downloadPdf(report, filename) {
+  const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import("html2canvas"), import("jspdf")]);
+  const reportElement = document.createElement("article");
+  reportElement.setAttribute("aria-hidden", "true");
+  reportElement.style.cssText = "position:fixed;left:-10000px;top:0;width:794px;padding:28px;background:#ffffff;color:#17233d;font-family:'Noto Sans JP',-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.35;z-index:-1;";
+  reportElement.innerHTML = `
+    <header style="padding-bottom:14px;border-bottom:2px solid #0c51cf">
+      <p style="margin:0;color:#63718a;font-size:11px;font-weight:700">ウェブ広告パフォーマンスシミュレーター</p>
+      <h1 style="margin:4px 0 0;color:#0c51cf;font-size:26px;letter-spacing:-.03em">シミュレーション レポート</h1>
+      <p style="margin:7px 0 0;color:#63718a;font-size:11px">作成日時: ${escapeHtml(formatExportDate(report.createdAt))}</p>
+    </header>
+    ${reportTable("入力条件", report.inputs)}
+    ${reportTable("シミュレーション結果（1か月あたり）", report.results)}
+    ${reportTable("シナリオ比較", report.scenarioRows, ["シナリオ", "条件", "月間利益", "売上", "CV数"])}
+    <p style="margin:16px 0 0;padding:10px;background:#f1f8ff;border:1px solid #bdddff;color:#52647f;font-size:10px">※ このレポートは概算シミュレーションです。実際の成果や利益を保証するものではありません。</p>
+  `;
+  document.body.appendChild(reportElement);
+  try {
+    if (document.fonts?.ready) await document.fonts.ready;
+    await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
+    const canvas = await html2canvas(reportElement, { backgroundColor: "#ffffff", scale: 1.5, useCORS: true, logging: false });
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4", compress: true });
+    const pageWidth = 595.28;
+    const pageHeight = 841.89;
+    const margin = 30;
+    const contentWidth = pageWidth - margin * 2;
+    const contentHeight = pageHeight - margin * 2;
+    const pageHeightPx = Math.floor(contentHeight * (canvas.width / contentWidth));
+
+    for (let offset = 0, page = 0; offset < canvas.height; offset += pageHeightPx, page += 1) {
+      const cropHeight = Math.min(pageHeightPx, canvas.height - offset);
+      const pageCanvas = document.createElement("canvas");
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = cropHeight;
+      const context = pageCanvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+      context.drawImage(canvas, 0, offset, canvas.width, cropHeight, 0, 0, pageCanvas.width, cropHeight);
+      if (page > 0) pdf.addPage();
+      pdf.addImage(pageCanvas.toDataURL("image/png"), "PNG", margin, margin, contentWidth, cropHeight * (contentWidth / canvas.width), undefined, "FAST");
+    }
+    pdf.save(`${filename}.pdf`);
+  } finally {
+    reportElement.remove();
+  }
 }
 
 function calculate(values, cvrModifier = 1, cpcModifier = 1) {
@@ -105,6 +247,9 @@ function App() {
   const [savedItems, setSavedItems] = useState([]);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [toast, setToast] = useState("");
+  const [downloadDialog, setDownloadDialog] = useState(false);
+  const [exportFormat, setExportFormat] = useState("pdf");
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     try {
@@ -199,6 +344,60 @@ function App() {
     setToast("入力内容を初期値に戻しました。");
   };
 
+  const downloadReport = async () => {
+    if (Object.keys(errors).length > 0) {
+      setToast("入力内容を確認してからダウンロードしてください。");
+      return;
+    }
+    if (exporting) return;
+
+    setExporting(true);
+    const createdAt = new Date();
+    const exportReport = createReport(values, result, scenarios, createdAt);
+    const filename = `広告効果シミュレーション_${exportTimestamp(createdAt)}`;
+    try {
+      if (exportFormat === "txt") {
+        downloadBlob(new Blob([`\ufeff${reportAsText(exportReport)}`], { type: "text/plain;charset=utf-8" }), `${filename}.txt`);
+      } else if (exportFormat === "csv") {
+        const csvRows = [
+          ["区分", "項目", "数値"],
+          ...exportReport.inputs.map((row) => ["入力条件", row.item, row.value]),
+          ...exportReport.results.map((row) => ["シミュレーション結果", row.item, row.value]),
+          ...exportReport.scenarioRows.map((row) => ["シナリオ比較", row.scenario, `${row.condition} / 月間利益 ${row.profit} / 売上 ${row.sales} / CV数 ${row.cvs}`]),
+        ];
+        const csv = csvRows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\r\n");
+        downloadBlob(new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" }), `${filename}.csv`);
+      } else if (exportFormat === "xlsx") {
+        const XLSX = await import("xlsx");
+        const workbook = XLSX.utils.book_new();
+        const inputSheet = XLSX.utils.aoa_to_sheet([["入力条件", "数値"], ...exportReport.inputs.map((row) => [row.item, row.value])]);
+        const resultSheet = XLSX.utils.aoa_to_sheet([["シミュレーション結果（1か月あたり）", "数値"], ...exportReport.results.map((row) => [row.item, row.value])]);
+        const scenarioSheet = XLSX.utils.aoa_to_sheet([["シナリオ", "条件", "月間利益", "売上", "CV数"], ...exportReport.scenarioRows.map((row) => [row.scenario, row.condition, row.profit, row.sales, row.cvs])]);
+        const overviewSheet = XLSX.utils.aoa_to_sheet([
+          ["ウェブ広告パフォーマンスシミュレーション レポート"],
+          ["作成日時", formatExportDate(createdAt)],
+          [],
+          ["注意事項"],
+          ["このレポートは概算シミュレーションです。実際の成果や利益を保証するものではありません。"],
+        ]);
+        for (const sheet of [inputSheet, resultSheet, scenarioSheet, overviewSheet]) sheet["!cols"] = [{ wch: 34 }, { wch: 28 }, { wch: 22 }, { wch: 20 }, { wch: 16 }];
+        XLSX.utils.book_append_sheet(workbook, overviewSheet, "概要");
+        XLSX.utils.book_append_sheet(workbook, inputSheet, "入力条件");
+        XLSX.utils.book_append_sheet(workbook, resultSheet, "計算結果");
+        XLSX.utils.book_append_sheet(workbook, scenarioSheet, "シナリオ比較");
+        XLSX.writeFile(workbook, `${filename}.xlsx`, { compression: true });
+      } else {
+        await downloadPdf(exportReport, filename);
+      }
+      setDownloadDialog(false);
+      setToast(`${exportFormats.find((format) => format.value === exportFormat)?.label}をダウンロードしました。`);
+    } catch {
+      setToast("ダウンロードに失敗しました。もう一度お試しください。");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const verdict = Object.keys(errors).length > 0
     ? { title: "入力すると結果が表示されます", copy: "左の5項目を入力すると、ここに利益の見込みが表示されます。", tone: "neutral" }
     : result.profit > 0
@@ -217,6 +416,7 @@ function App() {
         <div className="header-actions">
           <button className="saved-link" type="button" onClick={() => setLibraryOpen(true)}><FiArchive /> 保存済み（{savedItems.length}）</button>
           <div className="autosave"><span className="status-dot" /> 一時保存済み <small>{savedAt ? `${savedAt}に保存` : ""}</small></div>
+          <button className="secondary-button header-download" type="button" onClick={() => setDownloadDialog(true)} disabled={Object.keys(errors).length > 0}><FiDownload /> ダウンロード</button>
           <button className="primary-button header-save" type="button" onClick={openSaveDialog}><FiSave /> 保存する</button>
         </div>
       </header>
@@ -279,9 +479,10 @@ function App() {
         </section>
       </section>
 
-      <footer className="app-footer"><button className="primary-button footer-save" type="button" onClick={openSaveDialog}><FiSave /> 保存する</button><span className="autosave"><span className="status-dot" /> 一時保存済み <small>{savedAt ? `${savedAt}に保存` : ""}</small></span><button className="text-button" type="button" onClick={clearDraft}>入力を初期値に戻す</button></footer>
+      <footer className="app-footer"><button className="secondary-button footer-download" type="button" onClick={() => setDownloadDialog(true)} disabled={Object.keys(errors).length > 0}><FiDownload /> ダウンロード</button><button className="primary-button footer-save" type="button" onClick={openSaveDialog}><FiSave /> 保存する</button><span className="autosave"><span className="status-dot" /> 一時保存済み <small>{savedAt ? `${savedAt}に保存` : ""}</small></span><button className="text-button" type="button" onClick={clearDraft}>入力を初期値に戻す</button></footer>
 
       {toast && <div className="toast" role="status">{toast}</div>}
+      {downloadDialog && <Modal title="レポートをダウンロード" onClose={() => !exporting && setDownloadDialog(false)}><div className="download-form"><p>現在の入力内容とシミュレーション結果を、ひとつのレポートにまとめます。</p><label>ファイル形式<select value={exportFormat} onChange={(event) => setExportFormat(event.target.value)} disabled={exporting}>{exportFormats.map((format) => <option key={format.value} value={format.value}>{format.label}</option>)}</select></label><small>{exportFormats.find((format) => format.value === exportFormat)?.description}</small><div><button type="button" className="secondary-button" onClick={() => setDownloadDialog(false)} disabled={exporting}>キャンセル</button><button type="button" className="primary-button" onClick={downloadReport} disabled={exporting}>{exporting ? "作成中…" : <><FiDownload /> ダウンロード</>}</button></div></div></Modal>}
       {saveDialog && <Modal title="シミュレーションを保存" onClose={() => setSaveDialog(false)}><form className="save-form" onSubmit={saveSimulation}><label>保存する名前<input autoFocus value={saveName} onChange={(event) => setSaveName(event.target.value)} maxLength="80" /></label><p>このブラウザに保存されます。ブラウザのサイトデータを削除すると、保存した内容も削除されます。</p><div><button type="button" className="secondary-button" onClick={() => setSaveDialog(false)}>キャンセル</button><button type="submit" className="primary-button"><FiSave /> 保存する</button></div></form></Modal>}
       {libraryOpen && <aside className="library" aria-label="保存済みシミュレーション"><div className="library-head"><div><h2>保存済みシミュレーション</h2><p>このブラウザに保存されています。</p></div><button type="button" aria-label="閉じる" onClick={() => setLibraryOpen(false)}><FiX /></button></div>{savedItems.length === 0 ? <div className="empty-library"><FiArchive /><p>まだ保存したシミュレーションはありません。</p></div> : <div className="saved-list">{savedItems.map((item) => <article className="saved-item" key={item.id}><div><h3>{item.name}</h3><p>{new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.savedAt))}</p><dl><div><dt>広告予算</dt><dd>{yen(item.summary.budget)}</dd></div><div><dt>見込CV数</dt><dd>{count(item.summary.cvs)}</dd></div><div><dt>月間利益</dt><dd className={item.summary.profit < 0 ? "negative-number" : ""}>{yen(item.summary.profit)}</dd></div></dl></div><div className="saved-actions">{pendingDelete === item.id ? <><span>削除しますか？</span><button onClick={() => deleteItem(item.id)} type="button" className="delete-confirm">削除</button><button onClick={() => setPendingDelete(null)} type="button">戻る</button></> : <><button onClick={() => loadItem(item)} type="button">読み込む</button><button onClick={() => duplicateItem(item)} type="button" aria-label={`${item.name}を複製`}><FiCopy /></button><button onClick={() => setPendingDelete(item.id)} type="button" aria-label={`${item.name}を削除`}><FiTrash2 /></button></>}</div></article>)}</div>}</aside>}
       {libraryOpen && <button className="scrim" aria-label="一覧を閉じる" type="button" onClick={() => setLibraryOpen(false)} />}
