@@ -9,6 +9,7 @@ import {
   FiEdit3,
   FiHelpCircle,
   FiInfo,
+  FiLock,
   FiSave,
   FiSliders,
   FiTrash2,
@@ -243,6 +244,7 @@ function App() {
             <label>初期費用 <input inputMode="numeric" value={values.initialFee} onChange={(event) => updateValue("initialFee", event.target.value)} /><span>円</span></label>
           </div>}
           <aside className="beginner-note"><FiHelpCircle /><div><strong>はじめての方へ</strong><p>わからない項目は、目安の数字を入れて進められます。あとからいつでも見直せます。</p></div></aside>
+          <p className="privacy-note"><FiLock />入力した数値はお使いのブラウザ内にだけ保存され、外部には送信されません。</p>
         </form>
 
         <section className="results-panel" aria-live="polite">
