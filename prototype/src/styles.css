@@ -4,6 +4,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: #fbfdff; -webkit-font-smoothing: antialiased; }
 button, input { font: inherit; }
+.file-input { display: none; }
 button { cursor: pointer; }
 .app-shell { max-width: 1440px; margin: 0 auto; padding: 28px 42px 32px; }
 .app-header { display: flex; align-items: center; justify-content: space-between; gap: 28px; border-bottom: 1px solid #dde6f1; padding-bottom: 20px; }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   FiArchive,
   FiBarChart2,
@@ -14,11 +14,13 @@ import {
   FiSave,
   FiSliders,
   FiTrash2,
+  FiUpload,
   FiX,
 } from "react-icons/fi";
 
 const DRAFT_KEY = "ad-simulator:draft:v1";
 const SAVED_KEY = "ad-simulator:saved:v1";
+const OFFLINE_MODE = import.meta.env.VITE_OFFLINE === "true";
 
 const defaultValues = {
   budget: "300000",
@@ -145,6 +147,21 @@ function downloadBlob(blob, filename) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function safeFilename(value) {
+  return String(value).trim().replaceAll(/[\\/:*?"<>|]/g, "_").replaceAll(/\s+/g, " ").slice(0, 80) || "広告効果シミュレーション";
+}
+
+function normalizeImportedValues(candidate) {
+  if (!candidate || typeof candidate !== "object") return null;
+  const normalized = {};
+  for (const key of Object.keys(defaultValues)) {
+    const value = candidate[key];
+    if (value === undefined || value === null || (typeof value !== "string" && typeof value !== "number")) return null;
+    normalized[key] = String(value);
+  }
+  return normalized;
+}
+
 function escapeHtml(value) {
   return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
@@ -250,8 +267,10 @@ function App() {
   const [downloadDialog, setDownloadDialog] = useState(false);
   const [exportFormat, setExportFormat] = useState("pdf");
   const [exporting, setExporting] = useState(false);
+  const importInputRef = useRef(null);
 
   useEffect(() => {
+    if (OFFLINE_MODE) return;
     try {
       const draft = localStorage.getItem(DRAFT_KEY);
       const saved = localStorage.getItem(SAVED_KEY);
@@ -263,6 +282,7 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (OFFLINE_MODE) return undefined;
     const timer = window.setTimeout(() => {
       try {
         localStorage.setItem(DRAFT_KEY, JSON.stringify(values));
@@ -307,6 +327,21 @@ function App() {
 
   const saveSimulation = (event) => {
     event.preventDefault();
+    if (OFFLINE_MODE) {
+      const createdAt = new Date();
+      const name = saveName.trim() || "広告効果シミュレーション";
+      const document = {
+        application: "web-ad-performance-simulator",
+        version: 1,
+        name,
+        savedAt: createdAt.toISOString(),
+        values,
+      };
+      downloadBlob(new Blob([JSON.stringify(document, null, 2)], { type: "application/json;charset=utf-8" }), `${safeFilename(name)}_${exportTimestamp(createdAt)}.json`);
+      setSaveDialog(false);
+      setToast("保存ファイルを作成しました。保存先はブラウザで選べます。");
+      return;
+    }
     const item = {
       id: crypto.randomUUID(),
       name: saveName.trim() || "未命名のシミュレーション",
@@ -340,13 +375,29 @@ function App() {
 
   const clearDraft = () => {
     setValues(defaultValues);
-    localStorage.removeItem(DRAFT_KEY);
-    setToast("入力内容を初期値に戻しました。");
+    if (!OFFLINE_MODE) localStorage.removeItem(DRAFT_KEY);
+    setToast(OFFLINE_MODE ? "入力内容を初期値に戻しました。残したい内容は保存してください。" : "入力内容を初期値に戻しました。");
+  };
+
+  const importSimulation = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      if (parsed?.application !== "web-ad-performance-simulator" || parsed?.version !== 1) throw new Error("invalid document");
+      const importedValues = normalizeImportedValues(parsed.values);
+      if (!importedValues) throw new Error("invalid values");
+      setValues({ ...defaultValues, ...importedValues });
+      setToast(`「${parsed.name || file.name}」を読み込みました。`);
+    } catch {
+      setToast("このアプリで保存したファイルを選択してください。");
+    }
   };
 
   const downloadReport = async () => {
     if (Object.keys(errors).length > 0) {
-      setToast("入力内容を確認してからダウンロードしてください。");
+      setToast("入力内容を確認してからレポートを出力してください。");
       return;
     }
     if (exporting) return;
@@ -390,9 +441,9 @@ function App() {
         await downloadPdf(exportReport, filename);
       }
       setDownloadDialog(false);
-      setToast(`${exportFormats.find((format) => format.value === exportFormat)?.label}をダウンロードしました。`);
+      setToast(`${exportFormats.find((format) => format.value === exportFormat)?.label}を出力しました。`);
     } catch {
-      setToast("ダウンロードに失敗しました。もう一度お試しください。");
+      setToast("レポート出力に失敗しました。もう一度お試しください。");
     } finally {
       setExporting(false);
     }
@@ -414,9 +465,9 @@ function App() {
           <h1>ウェブ広告パフォーマンスシミュレーター</h1>
         </div>
         <div className="header-actions">
-          <button className="saved-link" type="button" onClick={() => setLibraryOpen(true)}><FiArchive /> 保存済み（{savedItems.length}）</button>
-          <div className="autosave"><span className="status-dot" /> 一時保存済み <small>{savedAt ? `${savedAt}に保存` : ""}</small></div>
-          <button className="secondary-button header-download" type="button" onClick={() => setDownloadDialog(true)} disabled={Object.keys(errors).length > 0}><FiDownload /> ダウンロード</button>
+          {OFFLINE_MODE ? <><button className="saved-link" type="button" onClick={() => importInputRef.current?.click()}><FiUpload /> 保存データを読み込む</button><input className="file-input" ref={importInputRef} type="file" accept="application/json,.json" onChange={importSimulation} /></> : <button className="saved-link" type="button" onClick={() => setLibraryOpen(true)}><FiArchive /> 保存済み（{savedItems.length}）</button>}
+          {!OFFLINE_MODE && <div className="autosave"><span className="status-dot" /> 一時保存済み <small>{savedAt ? `${savedAt}に保存` : ""}</small></div>}
+          <button className="secondary-button header-download" type="button" onClick={() => setDownloadDialog(true)} disabled={Object.keys(errors).length > 0}><FiDownload /> レポート出力</button>
           <button className="primary-button header-save" type="button" onClick={openSaveDialog}><FiSave /> 保存する</button>
         </div>
       </header>
@@ -444,7 +495,7 @@ function App() {
             <label>初期費用 <input inputMode="numeric" value={values.initialFee} onChange={(event) => updateValue("initialFee", event.target.value)} /><span>円</span></label>
           </div>}
           <aside className="beginner-note"><FiHelpCircle /><div><strong>はじめての方へ</strong><p>わからない項目は、目安の数字を入れて進められます。あとからいつでも見直せます。</p></div></aside>
-          <p className="privacy-note"><FiLock />入力した数値はお使いのブラウザ内にだけ保存され、外部には送信されません。</p>
+          <p className="privacy-note"><FiLock />{OFFLINE_MODE ? "入力内容はお使いの端末内だけで扱われ、外部には送信されません。" : "入力した数値はお使いのブラウザ内にだけ保存され、外部には送信されません。"}</p>
         </form>
 
         <section className="results-panel" aria-live="polite">
@@ -479,11 +530,11 @@ function App() {
         </section>
       </section>
 
-      <footer className="app-footer"><button className="secondary-button footer-download" type="button" onClick={() => setDownloadDialog(true)} disabled={Object.keys(errors).length > 0}><FiDownload /> ダウンロード</button><button className="primary-button footer-save" type="button" onClick={openSaveDialog}><FiSave /> 保存する</button><span className="autosave"><span className="status-dot" /> 一時保存済み <small>{savedAt ? `${savedAt}に保存` : ""}</small></span><button className="text-button" type="button" onClick={clearDraft}>入力を初期値に戻す</button></footer>
+      <footer className="app-footer"><button className="secondary-button footer-download" type="button" onClick={() => setDownloadDialog(true)} disabled={Object.keys(errors).length > 0}><FiDownload /> レポート出力</button><button className="primary-button footer-save" type="button" onClick={openSaveDialog}><FiSave /> 保存する</button>{!OFFLINE_MODE && <span className="autosave"><span className="status-dot" /> 一時保存済み <small>{savedAt ? `${savedAt}に保存` : ""}</small></span>}<button className="text-button" type="button" onClick={clearDraft}>入力を初期値に戻す</button></footer>
 
       {toast && <div className="toast" role="status">{toast}</div>}
-      {downloadDialog && <Modal title="レポートをダウンロード" onClose={() => !exporting && setDownloadDialog(false)}><div className="download-form"><p>現在の入力内容とシミュレーション結果を、ひとつのレポートにまとめます。</p><label>ファイル形式<select value={exportFormat} onChange={(event) => setExportFormat(event.target.value)} disabled={exporting}>{exportFormats.map((format) => <option key={format.value} value={format.value}>{format.label}</option>)}</select></label><small>{exportFormats.find((format) => format.value === exportFormat)?.description}</small><div><button type="button" className="secondary-button" onClick={() => setDownloadDialog(false)} disabled={exporting}>キャンセル</button><button type="button" className="primary-button" onClick={downloadReport} disabled={exporting}>{exporting ? "作成中…" : <><FiDownload /> ダウンロード</>}</button></div></div></Modal>}
-      {saveDialog && <Modal title="シミュレーションを保存" onClose={() => setSaveDialog(false)}><form className="save-form" onSubmit={saveSimulation}><label>保存する名前<input autoFocus value={saveName} onChange={(event) => setSaveName(event.target.value)} maxLength="80" /></label><p>このブラウザに保存されます。ブラウザのサイトデータを削除すると、保存した内容も削除されます。</p><div><button type="button" className="secondary-button" onClick={() => setSaveDialog(false)}>キャンセル</button><button type="submit" className="primary-button"><FiSave /> 保存する</button></div></form></Modal>}
+      {downloadDialog && <Modal title="レポートを出力" onClose={() => !exporting && setDownloadDialog(false)}><div className="download-form"><p>現在の入力内容とシミュレーション結果を、ひとつのレポートにまとめます。</p><label>ファイル形式<select value={exportFormat} onChange={(event) => setExportFormat(event.target.value)} disabled={exporting}>{exportFormats.map((format) => <option key={format.value} value={format.value}>{format.label}</option>)}</select></label><small>{exportFormats.find((format) => format.value === exportFormat)?.description}</small><div><button type="button" className="secondary-button" onClick={() => setDownloadDialog(false)} disabled={exporting}>キャンセル</button><button type="button" className="primary-button" onClick={downloadReport} disabled={exporting}>{exporting ? "作成中…" : <><FiDownload /> レポート出力</>}</button></div></div></Modal>}
+      {saveDialog && <Modal title={OFFLINE_MODE ? "入力内容を保存" : "シミュレーションを保存"} onClose={() => setSaveDialog(false)}><form className="save-form" onSubmit={saveSimulation}><label>保存する名前<input autoFocus value={saveName} onChange={(event) => setSaveName(event.target.value)} maxLength="80" /></label><p>{OFFLINE_MODE ? "保存を押すと、入力内容を保存したファイルが作成されます。保存先はブラウザの設定または表示される画面で選べます。次回は「保存データを読み込む」からこのファイルを選んでください。" : "このブラウザに保存されます。ブラウザのサイトデータを削除すると、保存した内容も削除されます。"}</p><div><button type="button" className="secondary-button" onClick={() => setSaveDialog(false)}>キャンセル</button><button type="submit" className="primary-button"><FiSave /> 保存する</button></div></form></Modal>}
       {libraryOpen && <aside className="library" aria-label="保存済みシミュレーション"><div className="library-head"><div><h2>保存済みシミュレーション</h2><p>このブラウザに保存されています。</p></div><button type="button" aria-label="閉じる" onClick={() => setLibraryOpen(false)}><FiX /></button></div>{savedItems.length === 0 ? <div className="empty-library"><FiArchive /><p>まだ保存したシミュレーションはありません。</p></div> : <div className="saved-list">{savedItems.map((item) => <article className="saved-item" key={item.id}><div><h3>{item.name}</h3><p>{new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.savedAt))}</p><dl><div><dt>広告予算</dt><dd>{yen(item.summary.budget)}</dd></div><div><dt>見込CV数</dt><dd>{count(item.summary.cvs)}</dd></div><div><dt>月間利益</dt><dd className={item.summary.profit < 0 ? "negative-number" : ""}>{yen(item.summary.profit)}</dd></div></dl></div><div className="saved-actions">{pendingDelete === item.id ? <><span>削除しますか？</span><button onClick={() => deleteItem(item.id)} type="button" className="delete-confirm">削除</button><button onClick={() => setPendingDelete(null)} type="button">戻る</button></> : <><button onClick={() => loadItem(item)} type="button">読み込む</button><button onClick={() => duplicateItem(item)} type="button" aria-label={`${item.name}を複製`}><FiCopy /></button><button onClick={() => setPendingDelete(item.id)} type="button" aria-label={`${item.name}を削除`}><FiTrash2 /></button></>}</div></article>)}</div>}</aside>}
       {libraryOpen && <button className="scrim" aria-label="一覧を閉じる" type="button" onClick={() => setLibraryOpen(false)} />}
     </main>
